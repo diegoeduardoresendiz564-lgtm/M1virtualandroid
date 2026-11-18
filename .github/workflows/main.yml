@@ -1,5 +1,5 @@
 
-name: Build Android APK
+name: Build M1 Virtual Android
 
 on:
   workflow_dispatch:
@@ -12,16 +12,184 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Generate Android project
+        run: |
+          mkdir -p app/src/main/java/com/example/m1virtual
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "M1VirtualAndroid"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.example.m1virtual'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.example.m1virtual'
+                  minSdk 26
+                  targetSdk 28
+                  versionCode 1
+                  versionName '0.1.0'
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:name="android.software.midi" android:required="false"/>
+              <application
+                  android:theme="@android:style/Theme.Material.NoActionBar"
+                  android:label="M1 Virtual"
+                  android:allowBackup="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/example/m1virtual/MainActivity.java <<'EOF'
+          package com.example.m1virtual;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.graphics.Color;
+          import android.view.Gravity;
+          import android.widget.*;
+          import android.media.*;
+          import android.media.midi.*;
+          import android.content.Context;
+
+          public class MainActivity extends Activity {
+              TextView status;
+              AudioTrack audio;
+              volatile boolean playing = false;
+
+              public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(1);
+                  root.setGravity(Gravity.CENTER);
+                  root.setPadding(24,30,24,24);
+                  root.setBackgroundColor(Color.rgb(22,27,39));
+
+                  TextView title = new TextView(this);
+                  title.setText("KORG M1 VIRTUAL");
+                  title.setTextSize(28);
+                  title.setTextColor(Color.WHITE);
+                  title.setGravity(Gravity.CENTER);
+                  root.addView(title);
+
+                  status = new TextView(this);
+                  status.setText("M1 Virtual - Motor de prueba");
+                  status.setTextColor(Color.WHITE);
+                  status.setGravity(Gravity.CENTER);
+                  status.setPadding(8,30,8,30);
+                  root.addView(status);
+
+                  Button midi = new Button(this);
+                  midi.setText("BUSCAR TECLADO MIDI USB");
+                  midi.setOnClickListener(v -> scanMidi());
+                  root.addView(midi);
+
+                  Button sound = new Button(this);
+                  sound.setText("PROBAR SONIDO");
+                  sound.setOnClickListener(v -> playTone());
+                  root.addView(sound);
+
+                  TextView info = new TextView(this);
+                  info.setText("Primera versión de prueba\\nMIDI: detección USB inicial\\nMotor de audio: tono de prueba");
+                  info.setTextColor(Color.LTGRAY);
+                  info.setGravity(Gravity.CENTER);
+                  info.setPadding(10,30,10,10);
+                  root.addView(info);
+
+                  setContentView(root);
+              }
+
+              void scanMidi() {
+                  MidiManager manager =
+                      (MidiManager)getSystemService(Context.MIDI_SERVICE);
+                  MidiDeviceInfo[] devices = manager.getDevices();
+                  if (devices.length == 0) {
+                      status.setText("No se detectó MIDI. Revisa USB OTG.");
+                  } else {
+                      status.setText("Dispositivo MIDI detectado: " + devices.length);
+                  }
+              }
+
+              void playTone() {
+                  final int rate = 44100;
+                  int size = AudioTrack.getMinBufferSize(
+                      rate, AudioFormat.CHANNEL_OUT_MONO,
+                      AudioFormat.ENCODING_PCM_16BIT);
+                  AudioTrack track = new AudioTrack(
+                      AudioManager.STREAM_MUSIC, rate,
+                      AudioFormat.CHANNEL_OUT_MONO,
+                      AudioFormat.ENCODING_PCM_16BIT,
+                      Math.max(size,4096), AudioTrack.MODE_STREAM);
+                  track.play();
+                  short[] data = new short[2048];
+                  double phase = 0;
+                  for (int i=0; i<data.length; i++) {
+                      data[i] = (short)(Math.sin(phase)*5000);
+                      phase += 2*Math.PI*440/rate;
+                  }
+                  track.write(data,0,data.length);
+                  track.stop();
+                  track.release();
+                  status.setText("Audio de prueba generado correctamente");
+              }
+          }
+          EOF
+
       - name: Build APK
         run: gradle assembleDebug
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: M1Virtual-debug-apk
+          name: M1Virtual-APK
           path: app/build/outputs/apk/debug/app-debug.apk
